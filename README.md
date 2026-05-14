@@ -20,7 +20,7 @@ A personal job application tracker built with React, TypeScript, and Tailwind CS
 
 ## Live Demo
 
-[job-tracker.vercel.app](https://job-tracker.vercel.app)
+[job-tracker-matin.vercel.app](https://job-tracker-matin.vercel.app)
 
 ## Getting Started
 
