@@ -1,26 +1,65 @@
 import { useState, useEffect } from "react";
 import type { Job } from "./types";
+import type { User } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
 import JobForm from "./components/JobForm";
 import JobList from "./components/JobList";
+import AuthForm from "./AuthForm";
+
+const STATUSES = ["All", "Applied", "Interview", "Offer", "Rejected"];
 
 function App() {
-  const [jobs, setJobs] = useState<Job[]>(() => {
-    const saved = localStorage.getItem("jobs");
-    return saved ? JSON.parse(saved) : [];
-  });
-
+  const [user, setUser] = useState<User | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [filter, setFilter] = useState<Job["status"] | "All">("All");
+  const [loading, setLoading] = useState(true);
 
+  // Auth state
   useEffect(() => {
-    localStorage.setItem("jobs", JSON.stringify(jobs));
-  }, [jobs]);
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
 
-  const addJob = (job: Job) => {
-    setJobs([...jobs, job]);
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchJobs = async () => {
+    const { data } = await supabase
+      .from("jobs")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (data) setJobs(data);
   };
 
-  const deleteJob = (id: number) => {
-    setJobs(jobs.filter((job) => job.id !== id));
+  // Jobs fetch
+  useEffect(() => {
+    if (!user) return;
+    fetchJobs();
+  }, [user]);
+
+  const addJob = async (job: Job) => {
+    const { data } = await supabase
+      .from("jobs")
+      .insert({ ...job, user_id: user?.id })
+      .select()
+      .single();
+    if (data) setJobs([data, ...jobs]);
+  };
+
+  const deleteJob = async (id: number) => {
+    await supabase.from("jobs").delete().eq("id", id);
+    setJobs(jobs.filter((j) => j.id !== id));
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
   };
 
   const filteredJobs =
@@ -34,17 +73,35 @@ function App() {
     Rejected: jobs.filter((j) => j.status === "Rejected").length,
   };
 
+  if (loading)
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+
+  if (!user) return <AuthForm />;
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-10">
-      {/* Header */}
-      <div className="mb-8 text-center">
-        <h1 className="text-4xl font-bold text-slate-800">Job Tracker</h1>
-        <p className="text-slate-400 mt-1">
-          {jobs.length} application{jobs.length !== 1 ? "s" : ""} tracked
-        </p>
+      <div className="mb-8 flex justify-between items-start">
+        <div>
+          <h1 className="text-4xl font-bold text-slate-800">Job Tracker</h1>
+          <p className="text-slate-400 mt-1">
+            {jobs.length} application{jobs.length !== 1 ? "s" : ""} tracked
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-slate-400 text-xs mb-1">{user.email}</p>
+          <button
+            onClick={handleSignOut}
+            className="text-sm text-red-400 hover:text-red-300 transition-colors"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mb-8">
         {[
           {
@@ -71,12 +128,10 @@ function App() {
         ))}
       </div>
 
-      {/* Form */}
       <JobForm onAdd={addJob} />
 
-      {/* Filter */}
       <div className="flex gap-2 mb-4 flex-wrap">
-        {["All", "Applied", "Interview", "Offer", "Rejected"].map((s) => (
+        {STATUSES.map((s) => (
           <button
             key={s}
             onClick={() => setFilter(s as Job["status"] | "All")}
@@ -91,7 +146,6 @@ function App() {
         ))}
       </div>
 
-      {/* List */}
       <JobList jobs={filteredJobs} onDelete={deleteJob} />
     </div>
   );
