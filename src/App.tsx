@@ -1,25 +1,34 @@
-import { useState, useEffect } from "react";
-import type { Job } from "./types";
+import { useState, useEffect, useMemo } from "react";
+import type { Job, NewJob } from "./types";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import JobForm from "./components/JobForm";
 import JobList from "./components/JobList";
-import AuthForm from "./AuthForm";
+import AuthForm from "./components/AuthForm";
+import { Briefcase, LogOut, Loader2, AlertCircle } from "lucide-react";
 
-const STATUSES = ["All", "Applied", "Interview", "Offer", "Rejected"];
+const STATUSES = ["All", "Applied", "Interview", "Offer", "Rejected"] as const;
 
 function App() {
   const [user, setUser] = useState<User | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [filter, setFilter] = useState<Job["status"] | "All">("All");
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobError, setJobError] = useState<string | null>(null);
 
-  // Auth state
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: { session } }) => {
+        setUser(session?.user ?? null);
+      })
+      .catch(() => {
+        setUser(null);
+      })
+      .finally(() => {
+        setAuthLoading(false);
+      });
 
     const {
       data: { subscription },
@@ -30,32 +39,47 @@ function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const fetchJobs = async () => {
-    const { data } = await supabase
-      .from("jobs")
-      .select("*")
-      .order("created_at", { ascending: false });
-    if (data) setJobs(data);
-  };
-
-  // Jobs fetch
   useEffect(() => {
     if (!user) return;
+
+    const fetchJobs = async () => {
+      setJobsLoading(true);
+      const { data, error } = await supabase
+        .from("jobs")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (!error && data) setJobs(data as Job[]);
+      setJobsLoading(false);
+    };
+
     fetchJobs();
   }, [user]);
 
-  const addJob = async (job: Job) => {
-    const { data } = await supabase
+  const addJob = async (newJob: NewJob) => {
+    setJobError(null);
+    const { data, error } = await supabase
       .from("jobs")
-      .insert({ ...job, user_id: user?.id })
+      .insert({ ...newJob, user_id: user!.id })
       .select()
       .single();
-    if (data) setJobs([data, ...jobs]);
+    if (error) {
+      setJobError(error.message);
+      return;
+    }
+    if (data) setJobs((prev) => [data as Job, ...prev]);
   };
 
   const deleteJob = async (id: number) => {
-    await supabase.from("jobs").delete().eq("id", id);
-    setJobs(jobs.filter((j) => j.id !== id));
+    setJobs((prev) => prev.filter((j) => j.id !== id));
+    const { error } = await supabase.from("jobs").delete().eq("id", id);
+    if (error) {
+      setJobError(error.message);
+      const { data } = await supabase
+        .from("jobs")
+        .select("*")
+        .order("created_at", { ascending: false });
+      if (data) setJobs(data as Job[]);
+    }
   };
 
   const handleSignOut = async () => {
@@ -65,88 +89,103 @@ function App() {
   const filteredJobs =
     filter === "All" ? jobs : jobs.filter((job) => job.status === filter);
 
-  const counts: Record<string, number> = {
-    All: jobs.length,
-    Applied: jobs.filter((j) => j.status === "Applied").length,
-    Interview: jobs.filter((j) => j.status === "Interview").length,
-    Offer: jobs.filter((j) => j.status === "Offer").length,
-    Rejected: jobs.filter((j) => j.status === "Rejected").length,
-  };
+  const counts = useMemo(() => {
+    const result: Record<string, number> = {
+      All: jobs.length,
+      Applied: 0,
+      Interview: 0,
+      Offer: 0,
+      Rejected: 0,
+    };
+    for (const job of jobs) result[job.status]++;
+    return result;
+  }, [jobs]);
 
-  if (loading)
+  if (authLoading)
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        <Loader2 className="w-5 h-5 text-white/20 animate-spin" />
       </div>
     );
 
   if (!user) return <AuthForm />;
 
   return (
-    <div className="max-w-3xl mx-auto px-4 py-10">
-      <div className="mb-8 flex justify-between items-start">
+    <div className="max-w-3xl mx-auto px-6 py-14">
+
+      {/* Header */}
+      <div className="mb-10 flex justify-between items-start">
         <div>
-          <h1 className="text-4xl font-bold text-slate-800">Job Tracker</h1>
-          <p className="text-slate-400 mt-1">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-9 h-9 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-700 flex items-center justify-center shadow-lg shadow-violet-500/25">
+              <Briefcase className="w-4 h-4 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">
+              Job Tracker
+            </h1>
+          </div>
+          <p className="text-white/25 text-sm ml-12">
             {jobs.length} application{jobs.length !== 1 ? "s" : ""} tracked
           </p>
         </div>
-        <div className="text-right">
-          <p className="text-slate-400 text-xs mb-1">{user.email}</p>
+        <div className="flex items-center gap-3 mt-1">
+          <span className="text-white/25 text-xs hidden sm:block">{user.email}</span>
           <button
             onClick={handleSignOut}
-            className="text-sm text-red-400 hover:text-red-300 transition-colors"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-white/[0.07] bg-white/[0.03] hover:bg-red-500/10 hover:border-red-500/20 text-white/30 hover:text-red-400 transition-all duration-200 text-xs"
           >
-            Sign out
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sign out</span>
           </button>
         </div>
       </div>
 
+      {/* Stats */}
       <div className="grid grid-cols-4 gap-3 mb-8">
         {[
-          {
-            label: "Applied",
-            color: "bg-blue-50 text-blue-600 border-blue-100",
-          },
-          {
-            label: "Interview",
-            color: "bg-yellow-50 text-yellow-600 border-yellow-100",
-          },
-          {
-            label: "Offer",
-            color: "bg-green-50 text-green-600 border-green-100",
-          },
-          { label: "Rejected", color: "bg-red-50 text-red-600 border-red-100" },
-        ].map(({ label, color }) => (
-          <div
-            key={label}
-            className={`border rounded-xl p-3 text-center ${color}`}
-          >
-            <p className="text-2xl font-bold">{counts[label]}</p>
-            <p className="text-xs">{label}</p>
+          { label: "Applied",   num: counts["Applied"],   accent: "text-violet-400",  bg: "bg-violet-500/[0.07]",  border: "border-violet-500/[0.15]"  },
+          { label: "Interview", num: counts["Interview"], accent: "text-amber-400",   bg: "bg-amber-500/[0.07]",   border: "border-amber-500/[0.15]"   },
+          { label: "Offer",     num: counts["Offer"],     accent: "text-emerald-400", bg: "bg-emerald-500/[0.07]", border: "border-emerald-500/[0.15]" },
+          { label: "Rejected",  num: counts["Rejected"],  accent: "text-rose-400",    bg: "bg-rose-500/[0.07]",    border: "border-rose-500/[0.15]"    },
+        ].map(({ label, num, accent, bg, border }) => (
+          <div key={label} className={`${bg} border ${border} rounded-2xl p-4`}>
+            <p className={`text-3xl font-bold tabular-nums leading-none ${accent}`}>{num}</p>
+            <p className="text-white/25 text-[11px] uppercase tracking-widest mt-2">{label}</p>
           </div>
         ))}
       </div>
 
+      {/* Error */}
+      {jobError && (
+        <div className="flex items-center gap-3 text-rose-400/80 text-sm mb-5 bg-rose-500/[0.06] border border-rose-500/[0.15] rounded-2xl px-4 py-3">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{jobError}</span>
+        </div>
+      )}
+
       <JobForm onAdd={addJob} />
 
-      <div className="flex gap-2 mb-4 flex-wrap">
+      {/* Filter */}
+      <div className="flex gap-1.5 mb-5 flex-wrap">
         {STATUSES.map((s) => (
           <button
             key={s}
             onClick={() => setFilter(s as Job["status"] | "All")}
-            className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-medium tracking-wide transition-all duration-200 ${
               filter === s
-                ? "bg-slate-800 text-white"
-                : "bg-white text-slate-500 hover:bg-slate-100 border"
+                ? "bg-white/[0.08] text-white border border-white/[0.14]"
+                : "text-white/30 hover:text-white/55 border border-transparent hover:border-white/[0.07]"
             }`}
           >
-            {s} ({counts[s]})
+            {s}
+            <span className={`ml-1.5 tabular-nums ${filter === s ? "text-white/40" : "text-white/15"}`}>
+              {counts[s]}
+            </span>
           </button>
         ))}
       </div>
 
-      <JobList jobs={filteredJobs} onDelete={deleteJob} />
+      <JobList jobs={filteredJobs} onDelete={deleteJob} loading={jobsLoading} />
     </div>
   );
 }
